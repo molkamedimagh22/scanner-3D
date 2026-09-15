@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner 3D — ESP32</title>
+    <link rel="stylesheet" href="/static/style.css">
+
+    <!-- Three.js pour la visualisation 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls pour tourner/zoomer l'objet -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Socket.IO pour la communication temps réel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+
+<body>
+    <!-- ═══════════════════════════════════════
+         HEADER
+    ═══════════════════════════════════════ -->
+    <header>
+        <div class="logo">
+            <span class="logo-icon">◈</span>
+            <span class="logo-text">Scanner 3D <span class="logo-sub">ESP32</span></span>
+        </div>
+        <div class="header-statut">
+            <div class="statut-badge" id="badge-connexion">
+                <span class="dot rouge"></span>
+                <span>Déconnecté</span>
+            </div>
+            <div class="statut-badge" id="badge-scan">
+                <span class="dot gris"></span>
+                <span>En attente</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════
+         LAYOUT PRINCIPAL
+    ═══════════════════════════════════════ -->
+    <main>
+
+        <!-- ── Panneau gauche ── -->
+        <aside class="panneau-gauche">
+
+            <!-- Connexion -->
+            <section class="carte">
+                <h3>Connexion ESP32</h3>
+                <div class="form-group">
+                    <label>Adresse IP</label>
+                    <input type="text" id="inp-ip" value="192.168.1.10" placeholder="192.168.1.10">
+                </div>
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="number" id="inp-port" value="8080">
+                </div>
+                <div class="btn-groupe">
+                    <button class="btn btn-primaire" id="btn-connecter" onclick="connecter()">
+                        Connecter
+                    </button>
+                    <button class="btn btn-danger" id="btn-deconnecter" onclick="deconnecter()" disabled>
+                        Déconnecter
+                    </button>
+                </div>
+            </section>
+
+            <!-- Paramètres -->
+            <section class="carte">
+                <h3>Paramètres du scan</h3>
+                <div class="form-group">
+                    <label>Résolution θ</label>
+                    <select id="sel-theta">
+                        <option value="0.9">0.9° (très fin)</option>
+                        <option value="1.8" selected>1.8° (fin)</option>
+                        <option value="3.6">3.6° (moyen)</option>
+                        <option value="5.4">5.4° (rapide)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Résolution φ</label>
+                    <select id="sel-phi">
+                        <option value="1.8">1.8° (très fin)</option>
+                        <option value="3.6" selected>3.6° (fin)</option>
+                        <option value="5.4">5.4° (moyen)</option>
+                        <option value="9">9° (rapide)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>φ minimum</label>
+                        <input type="number" id="inp-phi-min" value="30">
+                    </div>
+                    <div class="form-group">
+                        <label>φ maximum</label>
+                        <input type="number" id="inp-phi-max" value="150">
+                    </div>
+                </div>
+                <div class="estimation" id="estimation">
+                    Points estimés : <strong id="nb-estimation">6600</strong>
+                </div>
+            </section>
+
+            <!-- Contrôle -->
+            <section class="carte">
+                <h3>Contrôle</h3>
+                <button class="btn btn-vert btn-large" id="btn-scan" onclick="lancerScan()">
+                    ▶  Lancer le scan
+                </button>
+                <button class="btn btn-bleu btn-large" onclick="simuler()">
+                    🔁  Simuler (sans ESP32)
+                </button>
+                <button class="btn btn-danger btn-large" id="btn-stop" onclick="stopperScan()" disabled>
+                    ⏹  Stop
+                </button>
+                <div class="separateur"></div>
+                <button class="btn" onclick="resetPosition()">↺  Reset position</button>
+                <button class="btn" onclick="viderScene()">🗑  Vider la scène</button>
+                <button class="btn btn-primaire" onclick="sauvegarderScan()">💾  Sauvegarder .ply</button>
+            </section>
+
+            <!-- Moteurs manuels -->
+            <section class="carte">
+                <h3>Contrôle manuel</h3>
+                <div class="form-group">
+                    <label>Angle θ (plateau)</label>
+                    <div class="input-btn">
+                        <input type="number" id="inp-theta-manuel" value="90" min="0" max="360">
+                        <button class="btn btn-sm" onclick="bougerMoteur('theta')">Go</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Angle φ (bras)</label>
+                    <div class="input-btn">
+                        <input type="number" id="inp-phi-manuel" value="90" min="0" max="180">
+                        <button class="btn btn-sm" onclick="bougerMoteur('phi')">Go</button>
+                    </div>
+                </div>
+            </section>
+
+        </aside>
+
+        <!-- ── Zone 3D centrale ── -->
+        <div class="zone-3d">
+            <!-- Canvas Three.js -->
+            <div id="canvas-container">
+                <canvas id="canvas-3d"></canvas>
+                <!-- Overlay infos -->
+                <div class="overlay-infos">
+                    <span id="info-points">0 points</span>
+                    <span id="info-angles">θ=—  φ=—</span>
+                    <span id="info-dist">d=—</span>
+                </div>
+                <!-- Barre progression -->
+                <div class="barre-progression" id="barre-progression" style="display:none">
+                    <div class="barre-fill" id="barre-fill"></div>
+                    <span class="barre-texte" id="barre-texte">0%</span>
+                </div>
+                <!-- Message centre quand vide -->
+                <div class="message-centre" id="message-centre">
+                    <div class="message-icone">◈</div>
+                    <div class="message-titre">Scanner 3D prêt</div>
+                    <div class="message-sous">Lance un scan ou une simulation pour voir l'objet</div>
+                </div>
+            </div>
+
+            <!-- Contrôles vue -->
+            <div class="controles-vue">
+                <button class="btn-vue" onclick="resetCamera()">↺ Reset vue</button>
+                <button class="btn-vue" onclick="setVue('front')">Face</button>
+                <button class="btn-vue" onclick="setVue('top')">Dessus</button>
+                <button class="btn-vue" onclick="setVue('side')">Côté</button>
+                <button class="btn-vue" id="btn-mode-affichage" onclick="toggleAffichage()">
+                    Mode : Points
+                </button>
+            </div>
+        </div>
+
+        <!-- ── Panneau droit ── -->
+        <aside class="panneau-droit">
+
+            <!-- Statistiques -->
+            <section class="carte">
+                <h3>Statistiques</h3>
+                <div class="stat-grille">
+                    <div class="stat">
+                        <div class="stat-val" id="stat-points">0</div>
+                        <div class="stat-lbl">Points</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val" id="stat-prog">0%</div>
+                        <div class="stat-lbl">Progression</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val" id="stat-theta">—</div>
+                        <div class="stat-lbl">θ actuel</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val" id="stat-phi">—</div>
+                        <div class="stat-lbl">φ actuel</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val" id="stat-dist">—</div>
+                        <div class="stat-lbl">Distance</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val" id="stat-temps">00:00</div>
+                        <div class="stat-lbl">Temps</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Console log -->
+            <section class="carte carte-log">
+                <h3>Console</h3>
+                <div class="console" id="console-log"></div>
+            </section>
+
+        </aside>
+
+    </main>
+
+    <script src="/static/scanner.js"></script>
+</body>
+</html>
